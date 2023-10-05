@@ -9,7 +9,7 @@ from common.enums import Period
 from common.helpers import parse_date
 from database.db import get_db
 from models import Category, Product, Sales, Inventory, InventoryChange
-from schemas.sales import SalesRequest, SalesResponse, SalesRevenue
+from schemas.sales import SalesRequest, SalesResponse, SalesRevenue, SalesRevenueComparison
 
 sales_router = APIRouter()
 
@@ -155,7 +155,7 @@ async def calculate_revenue(
     return {"revenue": total_revenue}
 
 
-@sales_router.get("/compare-revenue", status_code=status.HTTP_200_OK)
+@sales_router.get("/compare-revenue", response_model=SalesRevenueComparison, status_code=status.HTTP_200_OK)
 async def compare_revenue(
         start_date: str = Query(..., description="Start date for revenue comparison (format: YYYY-MM-DD)"),
         end_date: str = Query(..., description="End date for revenue comparison (format: YYYY-MM-DD)"),
@@ -166,6 +166,7 @@ async def compare_revenue(
     :param start_date: str
     :param end_date: str
     :param db: Session
+    :return: SalesRevenueComparison
     """
     start_date = parse_date(start_date)
     end_date = parse_date(end_date)

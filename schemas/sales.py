@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import List
 
 from pydantic import BaseModel
 
@@ -11,14 +12,14 @@ class ProductSchema(RegisterProductRequest):
 
 class SalesRequest(BaseModel):
     quantity: int
-    amount: int
+    amount: float
     product_id: str
 
 
 class SalesResponse(BaseModel):
     id: str
     quantity: int
-    amount: int
+    amount: float
     product: ProductSchema
     created_at: datetime
     updated_at: datetime
@@ -28,3 +29,11 @@ class SalesResponse(BaseModel):
 class SalesRevenue(BaseModel):
     revenue: float
 
+
+class RevenueComparison(BaseModel):
+    category_id: str
+    total_revenue: float
+
+
+class SalesRevenueComparison(BaseModel):
+    revenue_comparison: List[RevenueComparison]
