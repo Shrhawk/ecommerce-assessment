@@ -16,7 +16,7 @@ sys.path.append(BASE_DIR)
 # access to the values within the .ini file in use.
 config = context.config
 
-config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
+config.set_main_option("sqlalchemy.url", os.environ["ALEMBIC_DATABASE_URL"])
 
 fileConfig(config.config_file_name)
 

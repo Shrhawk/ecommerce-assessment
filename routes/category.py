@@ -1,6 +1,7 @@
 from typing import List
 
 from fastapi import APIRouter, status, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database.db import get_db
@@ -20,7 +21,7 @@ async def create_category(request: CategoryRequest, db: Session = Depends(get_db
     """
     category = Category(name=request.name)
     db.add(category)
-    db.commit()
+    await db.commit()
     return category
 
 
@@ -37,4 +38,5 @@ async def get_categories(
     :param db: Session
     :return: List[CategoryResponse]
     """
-    return db.query(Category).filter(Category.is_active).limit(limit).offset(offset).all()
+    result = await db.execute(select(Category).where(Category.is_active).limit(limit).offset(offset))
+    return result.scalars().all()

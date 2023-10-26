@@ -25,6 +25,9 @@ class SalesResponse(BaseModel):
     updated_at: datetime
     is_active: bool
 
+    class Config:
+        orm_mode = True
+
 
 class SalesRevenue(BaseModel):
     revenue: float

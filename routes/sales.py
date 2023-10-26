@@ -2,8 +2,8 @@ from datetime import datetime, time, timedelta
 from typing import List
 
 from fastapi import APIRouter, Depends, status, Query, HTTPException
-from sqlalchemy import func
-from sqlalchemy.orm import Session
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, selectinload
 
 from common.enums import Period
 from common.helpers import parse_date
@@ -22,28 +22,36 @@ async def create_sale(request: List[SalesRequest], db: Session = Depends(get_db)
     :param db: Session
     :return: List[SalesResponse]
     """
+    sales = []
     for order_request in request:
-        inventory = db.query(Inventory).filter(Inventory.product_id == order_request.product_id).all()[0]
+        query = select(Inventory).where(Inventory.is_active, Inventory.product_id == order_request.product_id)
+        inventory = await db.execute(query)
+        inventory = inventory.scalar()
+
         if not inventory or order_request.quantity > inventory.stock_quantity:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Insufficient inventory found for product: {order_request.product_id}"
             )
-    sales = []
-    for order_request in request:
-        inventory = db.query(Inventory).filter(Inventory.product_id == order_request.product_id).all()[0]
+
         inventory.stock_quantity -= order_request.quantity
-        db.add(inventory)
         inventory_change = InventoryChange(
             inventory_id=inventory.id,
             old_stock=inventory.stock_quantity + order_request.quantity,
             current_stock=inventory.stock_quantity
         )
         db.add(inventory_change)
+
         sales.append(Sales(**order_request.model_dump()))
+
     db.add_all(sales)
-    db.commit()
-    return sales
+    await db.commit()
+    query = select(Sales).options(selectinload(Sales.product)).where(
+        Sales.is_active,
+        Sales.id.in_([sale.id for sale in sales])
+    )
+    sales = await db.execute(query)
+    return sales.scalars().all()
 
 
 @sales_router.get("", response_model=List[SalesResponse], status_code=status.HTTP_200_OK)
@@ -66,16 +74,18 @@ async def get_sales(
     start_date = parse_date(start_date)
     end_date = parse_date(end_date)
     end_date = datetime.combine(end_date.date(), time(23, 59, 59))
-    query = db.query(Sales).filter(
+    query = select(Sales).options(selectinload(Sales.product)).where(
         Sales.created_at >= start_date,
         Sales.created_at <= end_date,
         Sales.is_active
     )
     if product_id:
-        query = query.filter(Sales.product_id == product_id)
+        query = query.where(Sales.product_id == product_id)
     if category_id:
-        query = query.filter(Product.category_id == category_id)
-    return query.all()
+        query = query.join(Product).where(Product.category_id == category_id)
+
+    sales = await db.execute(query)
+    return sales.scalars().all()
 
 
 @sales_router.get("/all", response_model=List[SalesResponse], status_code=status.HTTP_200_OK)
@@ -91,7 +101,9 @@ async def get_all_sales(
     :param db: Session
     :return: List[SalesResponse]
     """
-    return db.query(Sales).limit(limit).offset(offset).all()
+    query = select(Sales).options(selectinload(Sales.product)).limit(limit).offset(offset)
+    result = await db.execute(query)
+    return result.scalars().all()
 
 
 @sales_router.get("/revenue", response_model=SalesRevenue, status_code=status.HTTP_200_OK)
@@ -138,7 +150,7 @@ async def calculate_revenue(
         else:
             end_date = datetime(start_date.year, start_date.month + 1, 1)
     elif period == Period.ANNUAL:
-        if not week_start:
+        if not year:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Year not found"
             )
@@ -146,12 +158,15 @@ async def calculate_revenue(
         end_date = datetime(year + 1, 1, 1)
     else:
         return {"revenue": 0}
-    query = db.query(Sales).filter(
-        Sales.created_at >= start_date,
-        Sales.created_at < end_date,
-        Sales.is_active
+
+    query = await db.execute(
+        select(Sales.amount)
+        .where(Sales.created_at >= start_date)
+        .where(Sales.created_at < end_date)
+        .where(Sales.is_active)
     )
-    total_revenue = sum(sale.amount for sale in query.all())
+    result = query.scalars().all()
+    total_revenue = sum(result)
     return {"revenue": total_revenue}
 
 
@@ -171,18 +186,24 @@ async def compare_revenue(
     start_date = parse_date(start_date)
     end_date = parse_date(end_date)
     end_date = datetime.combine(end_date.date(), time(23, 59, 59))
-    sales_data = db.query(Product.category_id, func.sum(Sales.amount)). \
-        join(Product, Sales.product_id == Product.id). \
-        join(Category, Product.category_id == Category.id). \
-        filter(Sales.created_at >= start_date, Sales.created_at <= end_date). \
-        group_by(Product.category_id, Category.id).all()
+
+    sales_data = await db.execute(
+        select(
+            Product.category_id,
+            func.sum(Sales.amount)
+        )
+        .join(Product, Sales.product_id == Product.id)
+        .join(Category, Product.category_id == Category.id)
+        .where(Sales.created_at >= start_date, Sales.created_at <= end_date)
+        .group_by(Product.category_id, Category.id)
+    )
 
     result = [
         {
             "category_id": category_id,
             "total_revenue": total_revenue
         }
-        for category_id, total_revenue in sales_data
+        for (category_id, total_revenue) in sales_data.all()
     ]
 
     return {"revenue_comparison": result}

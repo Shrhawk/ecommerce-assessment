@@ -1,6 +1,7 @@
 from typing import List
 
 from fastapi import APIRouter, Depends, Query, status, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database.db import get_db
@@ -13,14 +14,14 @@ inventory_router = APIRouter()
 @inventory_router.post("", response_model=InventoryResponse, status_code=status.HTTP_201_CREATED)
 async def add_inventory(request: InventoryRequest, db: Session = Depends(get_db)):
     """
-    Registers a new inventory in the database
+    Registers a new product in the database
     :param request: InventoryRequest
     :param db: Session
     :return: InventoryResponse
     """
     inventory = Inventory(**request.model_dump())
     db.add(inventory)
-    db.commit()
+    await db.commit()
     return inventory
 
 
@@ -35,10 +36,11 @@ async def view_inventory(
     :param db: Session
     :return: List[InventoryStatus]
     """
-    inventory = db.query(Inventory)
+    query = select(Inventory).where(Inventory.is_active)
     if low_stock_threshold:
-        inventory = inventory.filter(Inventory.stock_quantity <= low_stock_threshold)
-    return inventory.all()
+        query = query.where(Inventory.stock_quantity <= low_stock_threshold)
+    result = await(db.execute(query))
+    return result.scalars().all()
 
 
 @inventory_router.put("", response_model=InventoryResponse, status_code=status.HTTP_200_OK)
@@ -54,19 +56,20 @@ async def update_inventory(
     :param db: Session
     :return: InventoryChangeResponse
     """
-    product_inventory = db.query(Inventory).filter(Inventory.product_id == product_id)
-    if not product_inventory:
+    result = await db.execute(select(Inventory).where(Inventory.is_active, Inventory.product_id == product_id))
+    result = result.scalars().one_or_none()
+    if not result:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Product not found")
-    product_inventory = db.query(Inventory).filter(Inventory.product_id == product_id).first()
-    product_inventory.stock_quantity += quantity
-    InventoryChange(
-        inventory_id=product_inventory.id,
-        old_stock=product_inventory.stock_quantity,
-        current_stock=product_inventory.stock_quantity + quantity
+    result.stock_quantity += quantity
+    inventory_change = InventoryChange(
+        inventory_id=result.id,
+        old_stock=result.stock_quantity - quantity,
+        current_stock=result.stock_quantity
     )
-    db.add(product_inventory)
-    db.commit()
-    return product_inventory
+    db.add(result)
+    db.add(inventory_change)
+    await db.commit()
+    return result
 
 
 @inventory_router.get("/change", response_model=List[InventoryChangeResponse], status_code=status.HTTP_200_OK)
@@ -80,4 +83,6 @@ async def get_inventory_changes(
     :param db: Session
     :return: List[InventoryChangeResponse]
     """
-    return db.query(InventoryChange).filter(InventoryChange.inventory_id == inventory_id).all()
+    query = select(InventoryChange).where(InventoryChange.inventory_id == inventory_id)
+    result = await db.execute(query)
+    return result.scalars().all()

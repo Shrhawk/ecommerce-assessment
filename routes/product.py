@@ -1,6 +1,7 @@
 from typing import List
 
 from fastapi import APIRouter, status, Depends, Query, HTTPException
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from database.db import get_db
@@ -18,14 +19,15 @@ async def register_product(request: RegisterProductRequest, db: Session = Depend
     :param db: Session
     :return: RegisterProductResponse
     """
-    if request.category_id and not db.query(Category).filter(Category.id == request.category_id).all():
+    result = await db.execute(select(Category).where(Category.is_active, Category.id == request.category_id))
+    if request.category_id and not result.scalars().all():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Category not found"
         )
     product = Product(**request.model_dump())
     db.add(product)
-    db.commit()
+    await db.commit()
     return product
 
 
@@ -40,7 +42,8 @@ async def get_products(
     :param db: Session
     :return: List[RegisterProductResponse]
     """
-    query = db.query(Product).filter(Product.is_active)
+    query = select(Product).where(Product.is_active)
     if category_id:
-        query = query.filter(Product.category_id == category_id)
-    return query.all()
+        query = query.where(Product.category_id == category_id)
+    result = await db.execute(query)
+    return result.scalars().all()
